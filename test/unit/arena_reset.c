@@ -48,8 +48,31 @@ get_size_impl(const char *cmd, size_t ind) {
 }
 
 static size_t
+get_regs_impl(const char *cmd, size_t ind) {
+	uint32_t ret;
+	size_t z;
+	size_t mib[4];
+	size_t miblen = 4;
+
+	z = sizeof(size_t);
+	expect_d_eq(mallctlnametomib(cmd, mib, &miblen),
+	    0, "Unexpected mallctlnametomib(\"%s\", ...) failure", cmd);
+	mib[2] = ind;
+	z = sizeof(uint32_t);
+	expect_d_eq(mallctlbymib(mib, miblen, (void *)&ret, &z, NULL, 0),
+	    0, "Unexpected mallctlbymib([\"%s\", %zu], ...) failure", cmd, ind);
+
+	return ret;
+}
+
+static size_t
 get_small_size(size_t ind) {
 	return get_size_impl("arenas.bin.0.size", ind);
+}
+
+static size_t
+get_small_nregs(size_t ind) {
+	return get_regs_impl("arenas.bin.0.nregs", ind);
 }
 
 static size_t
@@ -94,10 +117,13 @@ do_arena_create(extent_hooks_t *h) {
 static void
 do_arena_reset_pre(unsigned arena_ind, void ***ptrs, unsigned *nptrs) {
 #define NLARGE	32
-	unsigned nsmall, nlarge, i;
+	unsigned nsmall, nlarge, i, j;
 	size_t sz;
 	int flags;
 	tsdn_t *tsdn;
+	int nregs;
+	void *ptr_tmp;
+	void *ptr_in_mid;
 
 	flags = MALLOCX_ARENA(arena_ind) | MALLOCX_TCACHE_NONE;
 
@@ -109,8 +135,20 @@ do_arena_reset_pre(unsigned arena_ind, void ***ptrs, unsigned *nptrs) {
 
 	/* Allocate objects with a wide range of sizes. */
 	for (i = 0; i < nsmall; i++) {
-		sz = get_small_size(i);
+		ptr_in_mid = NULL;
+		sz = get_small_size(i);	
 		(*ptrs)[i] = mallocx(sz, flags);
+
+		nregs = get_small_nregs(i);
+		for(j = 0; j < nregs + 1 ; j++){
+			/* Allocate objects more than one slab*/
+			ptr_tmp = mallocx(sz, flags);
+			if( ptr_in_mid == NULL){
+				ptr_in_mid = ptr_tmp;
+			}
+		}
+		/* Free one object in mid to move one slab into slabs_nonfull */
+		dallocx(ptr_in_mid, flags);
 		expect_ptr_not_null((*ptrs)[i],
 		    "Unexpected mallocx(%zu, %#x) failure", sz, flags);
 	}
